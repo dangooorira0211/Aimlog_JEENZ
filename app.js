@@ -206,11 +206,42 @@ function parseAimLabText(text){
 /* ---------------- App State ---------------- */
 let currentImageBlob = null;
 let allRecords = [];
+let recordsCache = null; // null = not loaded yet; once loaded, mutations update this in place for instant reflection
 let chartInstance = null;
 let activeMetrics = new Set(['combined']);
 let editingId = null;
 let editingPlayer = null;
 let currentPeriod = 'daily';
+
+function cacheAddRecord(record){
+  if(recordsCache) recordsCache = [...recordsCache, record];
+}
+function cacheEditRecord(oldPlayer, id, updatedFields){
+  if(!recordsCache) return;
+  const newPlayer = (updatedFields.player || oldPlayer).trim();
+  recordsCache = recordsCache.map(r => (r.player===oldPlayer && r.id===id) ? { ...r, ...updatedFields, id, player:newPlayer } : r);
+}
+function cacheDeleteRecord(player, id){
+  if(!recordsCache) return;
+  recordsCache = recordsCache.filter(r => !(r.player===player && r.id===id));
+}
+// Loads records from cache instantly if available (rendering right away), then silently
+// refreshes from GitHub in the background to pick up changes from other players/devices.
+async function loadRecords(renderFn){
+  if(recordsCache){
+    allRecords = recordsCache;
+    renderFn();
+    fetchAllRecords().then(fresh=>{
+      recordsCache = fresh;
+      allRecords = fresh;
+      renderFn();
+    }).catch(()=>{ /* background refresh failed silently — cached view stays */ });
+  }else{
+    allRecords = await fetchAllRecords();
+    recordsCache = allRecords;
+    renderFn();
+  }
+}
 
 /* ---------------- Navigation ---------------- */
 document.querySelectorAll('.nav-pills .pill').forEach(link=>{
@@ -352,6 +383,7 @@ document.getElementById('saveBtn').addEventListener('click', async ()=>{
   saveMsg.textContent = 'GitHubに保存しています…';
   try{
     await addRecordRemote(record);
+    cacheAddRecord(record);
     toast('記録を保存しました ✓');
     saveMsg.textContent = '';
 
@@ -476,17 +508,8 @@ function renderRankList(containerId, list){
       <span class="rank-name">${item.name}</span>
     </div>`).join('');
 }
-async function renderRanking(){
+function doRenderRanking(){
   const sub = document.getElementById('rankingSub');
-  sub.textContent = '読み込み中…';
-  try{
-    allRecords = await fetchAllRecords();
-  }catch(err){
-    console.error(err);
-    sub.textContent = 'データの読み込みに失敗しました';
-    toast('GitHubからのデータ取得に失敗しました');
-    return;
-  }
   initDailyDefault(allRecords);
   populateWeekOptions(allRecords);
   const filtered = filterByPeriod(allRecords, currentPeriod);
@@ -495,6 +518,17 @@ async function renderRanking(){
   renderRankList('rank-flick', buildRankList(filtered,'flick'));
   renderRankList('rank-track', buildRankList(filtered,'track'));
   renderRankList('rank-chal', buildRankList(filtered,'chal'));
+}
+async function renderRanking(){
+  const sub = document.getElementById('rankingSub');
+  if(!recordsCache) sub.textContent = '読み込み中…';
+  try{
+    await loadRecords(doRenderRanking);
+  }catch(err){
+    console.error(err);
+    sub.textContent = 'データの読み込みに失敗しました';
+    toast('GitHubからのデータ取得に失敗しました');
+  }
 }
 
 /* ---------------- Stats view ---------------- */
@@ -517,18 +551,18 @@ function getStatsFilteredRecords(){
 }
 async function renderStats(){
   const empty = document.getElementById('recordsEmpty');
-  empty.style.display='block';
-  empty.textContent = '読み込み中…';
+  if(!recordsCache){ empty.style.display='block'; empty.textContent = '読み込み中…'; }
   try{
-    allRecords = await fetchAllRecords();
+    await loadRecords(()=>{
+      populateStatsPlayerFilter(allRecords);
+      updateStatsView();
+    });
   }catch(err){
     console.error(err);
+    empty.style.display='block';
     empty.textContent = 'データの読み込みに失敗しました';
     toast('GitHubからのデータ取得に失敗しました');
-    return;
   }
-  populateStatsPlayerFilter(allRecords);
-  updateStatsView();
 }
 function updateStatsView(){
   const filtered = getStatsFilteredRecords();
@@ -611,8 +645,9 @@ function renderRecordsTable(records){
     b.disabled = true;
     try{
       await deleteRecordRemote(b.dataset.player, parseInt(b.dataset.del));
+      cacheDeleteRecord(b.dataset.player, parseInt(b.dataset.del));
       toast('削除しました');
-      allRecords = await fetchAllRecords();
+      allRecords = recordsCache || [];
       populateStatsPlayerFilter(allRecords);
       updateStatsView();
     }catch(err){
@@ -656,9 +691,10 @@ document.getElementById('modalSave').addEventListener('click', async ()=>{
       note: document.getElementById('m-note').value,
     };
     await editRecordRemote(editingPlayer, editingId, updatedFields);
+    cacheEditRecord(editingPlayer, editingId, updatedFields);
     toast('変更を保存しました ✓');
     document.getElementById('modalBg').classList.remove('show');
-    allRecords = await fetchAllRecords();
+    allRecords = recordsCache || [];
     populateStatsPlayerFilter(allRecords);
     updateStatsView();
   }catch(err){
@@ -674,9 +710,10 @@ document.getElementById('modalDelete').addEventListener('click', async ()=>{
   btn.disabled = true;
   try{
     await deleteRecordRemote(editingPlayer, editingId);
+    cacheDeleteRecord(editingPlayer, editingId);
     toast('削除しました');
     document.getElementById('modalBg').classList.remove('show');
-    allRecords = await fetchAllRecords();
+    allRecords = recordsCache || [];
     populateStatsPlayerFilter(allRecords);
     updateStatsView();
   }catch(err){
