@@ -1,9 +1,6 @@
-/* ---------------- GitHub-backed data layer ---------------- */
-const GITHUB_OWNER = 'dangooorira0211';
-const GITHUB_REPO = 'Aimlog_JEENZ';
-const GITHUB_BRANCH = 'main';
-const RAW_BASE = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/data`;
-const WORKER_URL = 'https://aimlog-api.dangooorira.workers.dev/player';
+/* ---------------- Worker (KV-backed) data layer ---------------- */
+const WORKER_BASE = 'https://aimlog-api.dangooorira.workers.dev';
+const WORKER_URL = `${WORKER_BASE}/player`;
 
 function sanitizeFileName(name){
   const cleaned = (name||'').trim().replace(/[\\/:*?"<>|]/g,'_').slice(0,80);
@@ -32,19 +29,16 @@ async function fetchJSON(url){
   return null;
 }
 
-async function fetchManifest(){
-  const data = await fetchJSON(`${RAW_BASE}/manifest.json`);
-  return Array.isArray(data) ? data : [];
-}
 async function fetchPlayerRecords(name){
-  const data = await fetchJSON(`${RAW_BASE}/players/${encodeURIComponent(sanitizeFileName(name))}.json`);
-  return Array.isArray(data) ? data : [];
+  const data = await fetchJSON(`${WORKER_BASE}/player?name=${encodeURIComponent(name)}`);
+  return (data && Array.isArray(data.records)) ? data.records : [];
 }
 async function fetchAllRecords(){
-  const names = await fetchManifest();
-  const lists = await Promise.all(names.map(n=>fetchPlayerRecords(n).catch(()=>[])));
+  const data = await fetchJSON(`${WORKER_BASE}/all`);
+  const names = (data && Array.isArray(data.manifest)) ? data.manifest : [];
+  const players = (data && data.players) ? data.players : {};
   const all = [];
-  names.forEach((name, i)=>{ (lists[i]||[]).forEach(r=> all.push({...r, player:r.player||name})); });
+  names.forEach(name=>{ (players[name]||[]).forEach(r=> all.push({...r, player: r.player||name})); });
   return all;
 }
 async function savePlayerRecords(playerName, records){
