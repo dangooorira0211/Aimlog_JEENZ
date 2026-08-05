@@ -11,11 +11,25 @@ function sanitizeFileName(name){
 }
 
 async function fetchJSON(url){
-  const bust = url.includes('?') ? '&' : '?';
-  const resp = await fetch(url + bust + '_t=' + Date.now(), { cache:'no-store' });
-  if(resp.status===404) return null;
-  if(!resp.ok) throw new Error('fetch failed: ' + resp.status);
-  return resp.json();
+  const attempts = 3;
+  let lastErr = null;
+  for(let i=0; i<attempts; i++){
+    try{
+      const bust = url.includes('?') ? '&' : '?';
+      const resp = await fetch(url + bust + '_t=' + Date.now(), { cache:'no-store' });
+      if(resp.status===404){
+        if(i < attempts-1){ await new Promise(r=>setTimeout(r, 900)); continue; }
+        return null;
+      }
+      if(!resp.ok) throw new Error('fetch failed: ' + resp.status);
+      return resp.json();
+    }catch(err){
+      lastErr = err;
+      if(i < attempts-1){ await new Promise(r=>setTimeout(r, 900)); continue; }
+    }
+  }
+  if(lastErr) throw lastErr;
+  return null;
 }
 
 async function fetchManifest(){
